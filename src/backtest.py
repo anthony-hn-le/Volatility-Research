@@ -1,0 +1,181 @@
+"""
+Portfolio backtesting: three strategies using volatility forecasts.
+"""
+import numpy as np
+import pandas as pd
+
+
+TRANSACTION_COST = 5.0  # $ per trade (applied as bp drag approximation)
+TARGET_VOL = 15.0       # % annualized
+
+
+def vol_timing_strategy(spy_returns, vol_forecasts, target_vol=TARGET_VOL,
+                        max_leverage=1.5, cost_per_trade=TRANSACTION_COST):
+    """
+    Volatility-timing: allocate SPY/SHY to target constant 15% annualized risk.
+    w_SPY = min(1.5, max(0, target_vol / forecast_vol))
+    Monthly rebalance. $5/trade transaction cost (simplified as fixed drag).
+    """
+    weights = (target_vol / vol_forecasts).clip(0, max_leverage)
+    weights = weights.resample('ME').last().reindex(spy_returns.index, method='ffill')
+
+    turnover = weights.diff().abs()
+    cost_drag = turnover * (cost_per_trade / 10000)
+
+    strategy_returns = weights.shift(1) * spy_returns - cost_drag
+    benchmark_returns = spy_returns
+
+    return pd.DataFrame({
+        'strategy': strategy_returns,
+        'benchmark': benchmark_returns,
+        'weight_spy': weights,
+    })
+
+
+def risk_parity_strategy(asset_returns, vol_forecasts_df, cost_per_trade=TRANSACTION_COST):
+    """
+    Cross-sectional risk parity: weights inversely proportional to forecasted vol.
+    asset_returns: DataFrame of daily returns (assets as columns).
+    vol_forecasts_df: DataFrame of vol forecasts (same columns).
+    """
+    inv_vol = 1.0 / vol_forecasts_df
+    weights = inv_vol.div(inv_vol.sum(axis=1), axis=0)
+    weights = weights.resample('ME').last().reindex(asset_returns.index, method='ffill')
+
+    turnover = weights.diff().abs().sum(axis=1)
+    cost_drag = turnover * (cost_per_trade / 10000)
+
+    strategy_returns = (weights.shift(1) * asset_returns).sum(axis=1) - cost_drag
+    equal_weight = asset_returns.mean(axis=1)
+
+    return pd.DataFrame({
+        'strategy': strategy_returns,
+        'equal_weight': equal_weight,
+    })
+
+
+def regime_strategy(spy_returns, vol_forecasts, bond_returns=None):
+    """
+    Regime-based: discrete equity-bond allocation.
+    Low (<15%): 100% SPY | Medium (15-25%): 60/40 | High (>25%): 20/80
+    """
+    if bond_returns is None:
+        bond_returns = pd.Series(0.0004, index=spy_returns.index)  # ~10% annual proxy
+
+    equity_weight = pd.cut(
+        vol_forecasts,
+        bins=[0, 15, 25, np.inf],
+        labels=[1.0, 0.6, 0.2]
+    ).astype(float)
+    equity_weight = equity_weight.resample('ME').last().reindex(spy_returns.index, method='ffill')
+    bond_weight = 1.0 - equity_weight
+
+    strategy_returns = equity_weight.shift(1) * spy_returns + bond_weight.shift(1) * bond_returns
+    return pd.DataFrame({'strategy': strategy_returns, 'equity_weight': equity_weight})
+
+
+def vrp_strategy(
+    spy_returns: pd.Series,
+    model_forecasts: pd.Series,
+    iv_series: pd.Series,
+    cost_per_trade: float = TRANSACTION_COST,
+) -> pd.DataFrame:
+    """
+    Variance Risk Premium (VRP) strategy: exploit the spread between implied
+    volatility and the model's vol forecast.
+
+    Signal logic (proportional, no leverage):
+        vrp_spread = IV_t − model_forecast_t
+        signal_t   = clip(vrp_spread / IV_t, 0, 1)
+
+    When the model thinks IV is too high (vrp_spread > 0), the strategy goes
+    long VRP (i.e. short implied vol).  When the model agrees with or exceeds
+    IV, the signal is zero (flat).
+
+    Return proxy — daily P&L of a delta-neutral short straddle:
+        daily_iv_decay = IV / 100 / √252   (theta earned per day)
+        daily_rv_cost  = |r_t|             (realized move paid)
+        vrp_daily_pnl  = daily_iv_decay − daily_rv_cost
+
+    Both terms are in log-return space (daily fraction), consistent with how
+    'return' is stored in the project data pipeline.
+
+    Monthly rebalance with $5/trade transaction-cost drag (same convention as
+    the three existing strategies). The 'strategy' column is directly consumable
+    by performance_metrics().
+
+    Args:
+        spy_returns:     Daily log returns for SPY over the test period.
+        model_forecasts: Model's annualised vol forecast (%) at each month-end,
+                         indexed by month-end dates.
+        iv_series:       IV proxy (VIX, %) at the same month-end dates.
+        cost_per_trade:  Transaction cost in dollars (converted to bp drag).
+
+    Returns:
+        pd.DataFrame with columns ['strategy', 'benchmark', 'vrp_signal',
+        'vrp_spread'].
+    """
+    # ── Signal (month-end frequency) ──────────────────────────────────────────
+    vrp_spread = iv_series - model_forecasts           # positive → IV > model
+    signal = (vrp_spread / iv_series).clip(lower=0, upper=1)
+
+    # Forward-fill to daily frequency (position set at month-end close)
+    signal_daily = (
+        signal
+        .resample('ME').last()
+        .reindex(spy_returns.index, method='ffill')
+        .fillna(0.0)
+    )
+    vrp_spread_daily = (
+        vrp_spread
+        .reindex(spy_returns.index, method='ffill')
+        .fillna(0.0)
+    )
+
+    # ── Daily P&L proxy for a delta-neutral short straddle ────────────────────
+    iv_daily = (
+        iv_series
+        .reindex(spy_returns.index, method='ffill')
+        .bfill()   # fill any leading NaN at the start of the test period
+    )
+    daily_iv_decay = iv_daily / 100.0 / np.sqrt(252)  # theta earned (daily %)
+    daily_rv_cost  = spy_returns.abs()                 # realized move paid
+    vrp_daily_pnl  = daily_iv_decay - daily_rv_cost
+
+    # ── Transaction costs ─────────────────────────────────────────────────────
+    turnover  = signal_daily.diff().abs()
+    cost_drag = turnover * (cost_per_trade / 10_000)
+
+    # ── Strategy returns ──────────────────────────────────────────────────────
+    strategy_returns = signal_daily.shift(1) * vrp_daily_pnl - cost_drag
+
+    return pd.DataFrame({
+        'strategy':   strategy_returns,
+        'benchmark':  spy_returns,
+        'vrp_signal': signal_daily,
+        'vrp_spread': vrp_spread_daily,
+    })
+
+
+def performance_metrics(returns, rf_rate=0.04):
+    """Compute Sharpe, Sortino, max drawdown, Calmar from a return series."""
+    ann_ret = returns.mean() * 252
+    ann_vol = returns.std() * np.sqrt(252)
+    sharpe = (ann_ret - rf_rate) / ann_vol if ann_vol > 0 else np.nan
+
+    downside = returns[returns < 0].std() * np.sqrt(252)
+    sortino = (ann_ret - rf_rate) / downside if downside > 0 else np.nan
+
+    cum = (1 + returns).cumprod()
+    drawdown = (cum / cum.cummax() - 1)
+    max_dd = drawdown.min()
+    calmar = ann_ret / abs(max_dd) if max_dd != 0 else np.nan
+
+    return {
+        'Ann. Return': ann_ret,
+        'Ann. Volatility': ann_vol,
+        'Sharpe': sharpe,
+        'Sortino': sortino,
+        'Max Drawdown': max_dd,
+        'Calmar': calmar,
+    }
