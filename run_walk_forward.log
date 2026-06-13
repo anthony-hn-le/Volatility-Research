@@ -1,0 +1,32 @@
+Loading features and realized vol...
+  31 feature cols, 18 assets, 96 refit dates
+
+>>> LSTM walk-forward (parallel, n_jobs=4) ...
+[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
+[Parallel(n_jobs=4)]: Done  10 tasks      | elapsed: 890.4min
+[Parallel(n_jobs=4)]: Done  15 out of  18 | elapsed: 1428.0min remaining: 285.6min
+[Parallel(n_jobs=4)]: Done  18 out of  18 | elapsed: 1447.7min finished
+Done in 86864s  |  1,728 rows  →  /Users/anthonyle/Documents/Denison/Volatility Research/data/processed/forecasts_lstm.csv
+
+>>> GARCH-RF walk-forward (parallel) ...
+[Parallel(n_jobs=-1)]: Using backend LokyBackend with 10 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   3 out of  18 | elapsed:  7.1min remaining: 35.3min
+[Parallel(n_jobs=-1)]: Done   7 out of  18 | elapsed:  7.3min remaining: 11.5min
+[Parallel(n_jobs=-1)]: Done  11 out of  18 | elapsed: 13.5min remaining:  8.6min
+[Parallel(n_jobs=-1)]: Done  15 out of  18 | elapsed: 13.9min remaining:  2.8min
+[Parallel(n_jobs=-1)]: Done  18 out of  18 | elapsed: 14.0min finished
+Done in 841s  |  1,728 rows  →  /Users/anthonyle/Documents/Denison/Volatility Research/data/processed/forecasts_garch_rf.csv
+
+>>> GARCH-XGB walk-forward (parallel) ...
+[Parallel(n_jobs=-1)]: Using backend LokyBackend with 10 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   3 out of  18 | elapsed:   52.4s remaining:  4.4min
+[Parallel(n_jobs=-1)]: Done   7 out of  18 | elapsed:  1.1min remaining:  1.7min
+[Parallel(n_jobs=-1)]: Done  11 out of  18 | elapsed:  1.7min remaining:  1.1min
+[Parallel(n_jobs=-1)]: Done  15 out of  18 | elapsed:  1.9min remaining:   22.7s
+[Parallel(n_jobs=-1)]: Done  18 out of  18 | elapsed:  2.1min finished
+Done in 129s  |  1,728 rows  →  /Users/anthonyle/Documents/Denison/Volatility Research/data/processed/forecasts_garch_xgb.csv
+
+=== Output summary ===
+  LSTM          1,728 rows  SPY h1: 5.5%–58.9%
+  GARCH-RF      1,728 rows  SPY h1: 8.3%–88.0%
+  GARCH-XGB     1,728 rows  SPY h1: 6.4%–49.6%

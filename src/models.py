@@ -4,6 +4,13 @@ Each model implements fit(returns_or_X, y) and forecast(X_new) -> float.
 """
 from __future__ import annotations
 
+# Must be set before any C-extension that links OpenMP/MKL is imported.
+# Without this, xgboost and PyTorch deadlock on macOS Apple Silicon.
+import os
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+
 from typing import Literal, Optional, cast
 
 # Matches the Literal accepted by arch_model's vol parameter type stub
@@ -11,11 +18,16 @@ _ArchVolLiteral = Literal['GARCH', 'ARCH', 'EGARCH', 'FIGARCH', 'APARCH', 'HARCH
 
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from arch import arch_model
 from arch.univariate.base import ARCHModelResult
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-import xgboost as xgb
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+
 
 
 class GARCHModel:
@@ -169,3 +181,246 @@ class XGBoostModel:
         assert self.model is not None, "Call fit() before forecast()"
         X_scaled = self.scaler.transform(X_new)
         return float(self.model.predict(X_scaled)[0])
+
+
+# ---------------------------------------------------------------------------
+# PyTorch LSTM internals
+# ---------------------------------------------------------------------------
+
+class _LSTMNet(nn.Module):
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int,
+                 dropout: float) -> None:
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0,
+            batch_first=True,
+        )
+        self.head = nn.Linear(hidden_size, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out, _ = self.lstm(x)
+        return self.head(out[:, -1, :]).squeeze(-1)
+
+
+def _train_lstm_net(
+    net: "_LSTMNet",
+    X_tr_t: "torch.Tensor",
+    y_tr_t: "torch.Tensor",
+    X_val_t: "torch.Tensor",
+    y_val_t: "torch.Tensor",
+    lr: float,
+    epochs: int,
+    batch_size: int,
+) -> None:
+    """Train `net` in-place with early stopping."""
+    loader = DataLoader(
+        TensorDataset(X_tr_t, y_tr_t),
+        batch_size=batch_size, shuffle=False,
+    )
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+
+    best_val, patience, no_improve = float('inf'), 10, 0
+    best_state: Optional[dict] = None
+
+    net.train()
+    for _ in range(epochs):
+        for xb, yb in loader:
+            opt.zero_grad()
+            loss_fn(net(xb), yb).backward()
+            opt.step()
+
+        net.eval()
+        with torch.no_grad():
+            val_loss = loss_fn(net(X_val_t), y_val_t).item()
+        net.train()
+
+        if val_loss < best_val - 1e-6:
+            best_val = val_loss
+            best_state = {k: v.clone() for k, v in net.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                break
+
+    if best_state is not None:
+        net.load_state_dict(best_state)
+    net.eval()
+
+
+class LSTMModel:
+    """
+    PyTorch LSTM for volatility forecasting.
+
+    fit(X, y) builds sliding windows of shape (lookback, n_features), trains
+    the net, and stores the last window for forecast().
+
+    forecast(X_new) accepts a single-row DataFrame (the walk-forward loop
+    pattern) or a full lookback-length DataFrame.  When given one row it
+    slides it into the stored window from fit().
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 128,
+        num_layers: int = 2,
+        dropout: float = 0.2,
+        lookback: int = 30,
+        lr: float = 1e-3,
+        epochs: int = 50,
+        batch_size: int = 32,
+        random_state: int = 42,
+    ) -> None:
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.lookback = lookback
+        self.lr = lr
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.random_state = random_state
+        self._net: Optional[_LSTMNet] = None
+        self._x_scaler = StandardScaler()
+        self._y_scaler = StandardScaler()
+        self._last_window: Optional[np.ndarray] = None  # shape (lookback, features)
+
+    def _build_sequences(self, X_scaled: np.ndarray, y_scaled: np.ndarray):
+        seqs, targets = [], []
+        for i in range(self.lookback, len(X_scaled) + 1):
+            seqs.append(X_scaled[i - self.lookback: i])
+            targets.append(y_scaled[i - 1])
+        return np.array(seqs, dtype=np.float32), np.array(targets, dtype=np.float32)
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> "LSTMModel":
+        torch.manual_seed(self.random_state)
+        np.random.seed(self.random_state)
+
+        X_scaled = self._x_scaler.fit_transform(X).astype(np.float32)
+        y_scaled = self._y_scaler.fit_transform(
+            y.values.reshape(-1, 1)
+        ).ravel().astype(np.float32)
+
+        seqs, targets = self._build_sequences(X_scaled, y_scaled)
+        if len(seqs) < 2:
+            raise ValueError(f"Not enough data for lookback={self.lookback}")
+
+        # Chronological 90/10 train/val split
+        # Use torch.tensor() (copies) to avoid memory aliasing with numpy views
+        n_val = max(1, int(len(seqs) * 0.10))
+        X_tr_t = torch.tensor(seqs[:-n_val])
+        y_tr_t = torch.tensor(targets[:-n_val])
+        X_val_t = torch.tensor(seqs[-n_val:])
+        y_val_t = torch.tensor(targets[-n_val:])
+
+        self._net = _LSTMNet(X_scaled.shape[1], self.hidden_size,
+                             self.num_layers, self.dropout)
+
+        _train_lstm_net(self._net, X_tr_t, y_tr_t, X_val_t, y_val_t,
+                        self.lr, self.epochs, self.batch_size)
+
+        # Store last lookback rows for walk-forward forecast() calls
+        self._last_window = X_scaled[-self.lookback:]
+        return self
+
+    def forecast(self, X_new: pd.DataFrame) -> float:
+        assert self._net is not None, "Call fit() before forecast()"
+
+        X_new_scaled = self._x_scaler.transform(X_new).astype(np.float32)
+
+        if len(X_new_scaled) == self.lookback:
+            window = X_new_scaled
+        elif len(X_new_scaled) == 1:
+            # Slide stored window: drop oldest, append new row
+            window = np.vstack([self._last_window[1:], X_new_scaled])
+        else:
+            raise ValueError(
+                f"X_new must have 1 or {self.lookback} rows, got {len(X_new_scaled)}"
+            )
+
+        seq = torch.from_numpy(window[np.newaxis])  # (1, lookback, features)
+        with torch.no_grad():
+            pred_scaled = self._net(seq).item()
+
+        return float(
+            self._y_scaler.inverse_transform([[pred_scaled]])[0, 0]
+        )
+
+
+# ---------------------------------------------------------------------------
+# Hybrid GARCH + ML
+# ---------------------------------------------------------------------------
+
+class GARCHHybridModel:
+    """
+    Hybrid model: GARCH fitted values and standardized residuals are appended
+    to the engineer_features matrix, then a RandomForest or XGBoost is trained
+    on the augmented feature set.
+
+    Usage
+    -----
+    model = GARCHHybridModel(ml_model_type='RF')
+    model.fit(X_train, y_train, returns_train)
+    fc = model.forecast(X_new)   # returns_series not needed at forecast time
+    """
+
+    def __init__(
+        self,
+        ml_model_type: Literal['RF', 'XGB'] = 'RF',
+        garch_vol: str = 'Garch',
+        garch_p: int = 1,
+        garch_o: int = 0,
+        garch_q: int = 1,
+    ) -> None:
+        self.ml_model_type = ml_model_type
+        self._garch = GARCHModel(vol=garch_vol, p=garch_p, o=garch_o, q=garch_q)
+        self._ml: Optional[RandomForestModel | XGBoostModel] = None
+        self._garch_fc_vol: Optional[float] = None
+        self._garch_last_resid: Optional[float] = None
+
+    def _make_ml_model(self):
+        if self.ml_model_type == 'RF':
+            return RandomForestModel(n_jobs=1)
+        return XGBoostModel()
+
+    def _augment(self, X: pd.DataFrame, fitted_vol: pd.Series,
+                 std_resid: pd.Series) -> pd.DataFrame:
+        aug = X.copy()
+        aug['garch_fitted_vol'] = fitted_vol.reindex(X.index)
+        aug['garch_std_resid'] = std_resid.reindex(X.index)
+        return aug.dropna(subset=['garch_fitted_vol', 'garch_std_resid'])
+
+    def fit(self, X: pd.DataFrame, y: pd.Series,
+            returns: pd.Series) -> "GARCHHybridModel":
+        # Fit GARCH on the full returns series available at time T
+        self._garch.fit(returns)
+        result = self._garch.result
+
+        cond_vol = result.conditional_volatility  # annualized % (same scale as rv_21d)
+        std_resid = result.resid / result.conditional_volatility
+
+        # Align to X's index (daily, same dates)
+        fitted_vol = pd.Series(cond_vol.values, index=returns.index).reindex(X.index)
+        std_resid_s = pd.Series(std_resid.values, index=returns.index).reindex(X.index)
+
+        X_aug = self._augment(X, fitted_vol, std_resid_s)
+        y_aligned = y.reindex(X_aug.index)
+
+        self._ml = self._make_ml_model()
+        self._ml.fit(X_aug, y_aligned)
+
+        # Cache one-step-ahead GARCH values for forecast()
+        garch_1step = self._garch.forecast(horizon=1)
+        self._garch_fc_vol = float(garch_1step[0])
+        self._garch_last_resid = float(std_resid.iloc[-1])
+        return self
+
+    def forecast(self, X_new: pd.DataFrame) -> float:
+        assert self._ml is not None, "Call fit() before forecast()"
+        X_aug = X_new.copy()
+        X_aug['garch_fitted_vol'] = self._garch_fc_vol
+        X_aug['garch_std_resid'] = self._garch_last_resid
+        return self._ml.forecast(X_aug)

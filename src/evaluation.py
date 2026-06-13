@@ -15,6 +15,7 @@ def mae(y_true, y_pred):
 
 def qlike(y_true, y_pred):
     """Quasi-likelihood loss: robust to imperfect volatility proxies."""
+    y_pred = np.clip(y_pred, 1e-6, None)   # guard against zero/negative forecasts
     ratio = y_true / (y_pred ** 2)
     return np.mean(ratio - np.log(ratio) - 1)
 
@@ -49,12 +50,14 @@ def regime_evaluation(y_true, forecasts_dict, regimes):
     regimes: Series with values 'low', 'medium', 'high', aligned to y_true.
     """
     results = {}
+    regimes = pd.array(regimes)  # ensure consistent comparison (handles Categorical too)
     for regime in ['low', 'medium', 'high']:
-        mask = regimes == regime
+        mask = (regimes == regime) & pd.notna(regimes)
         if mask.sum() < 10:
             continue
-        subset_true = y_true[mask]
-        subset_preds = {k: v[mask.values] for k, v in forecasts_dict.items()}
+        mask_np = np.asarray(mask)
+        subset_true = y_true[mask_np]
+        subset_preds = {k: v[mask_np] for k, v in forecasts_dict.items()}
         results[regime] = evaluate_forecasts(subset_true, subset_preds)
     return results
 
