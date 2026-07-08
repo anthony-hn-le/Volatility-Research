@@ -1,0 +1,10 @@
+Model,Compute Cost,Wall-clock (s),RMSE (h1),In 90% MCS?,Best Strategy,Best Sharpe,"vs. GARCH(1,1) (same strategy)"
+"GJR-GARCH(1,1)","Low (secs-min, part of ~15-25min/4 models combined)",,6.949,False,VRP,2.963,0.833
+LSTM,Very High,86864.0,5.152,False,VRP,2.806,0.676
+XGBoost,Low-Medium (not separately timed),,6.575,False,VRP,2.752,0.621
+Random Forest,Low-Medium (not separately timed),,2.039,True,VRP,2.751,0.621
+GARCH-XGBoost,Low,129.0,8.25,False,VRP,2.321,0.191
+"GARCH(1,1)","Low (secs-min, part of ~15-25min/4 models combined)",,6.255,False,VRP,2.13,0.0
+HAR-RV,"Very Low (OLS, negligible)",,17.964,False,VRP,1.254,-0.877
+"EGARCH(1,1)","Low (secs-min, part of ~15-25min/4 models combined)",,7.364,False,VRP,1.218,-0.912
+GARCH-RF,Medium,841.0,5.828,False,VRP,1.061,-1.069

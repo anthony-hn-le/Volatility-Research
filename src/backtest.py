@@ -1,5 +1,10 @@
 """
-Portfolio backtesting: three strategies using volatility forecasts.
+Portfolio backtesting: four strategies using volatility forecasts.
+
+All return series (spy_returns, asset_returns, bond_returns) are expected to be
+LOG returns, matching the project-wide convention in src/data.py (`np.log(Close
+/ Close.shift(1))`). performance_metrics() compounds them via exp(cumsum()),
+not (1+r).cumprod(), which is only valid for simple returns.
 """
 import numpy as np
 import pandas as pd
@@ -29,6 +34,7 @@ def vol_timing_strategy(spy_returns, vol_forecasts, target_vol=TARGET_VOL,
         'strategy': strategy_returns,
         'benchmark': benchmark_returns,
         'weight_spy': weights,
+        'cost_drag': cost_drag,
     })
 
 
@@ -51,13 +57,15 @@ def risk_parity_strategy(asset_returns, vol_forecasts_df, cost_per_trade=TRANSAC
     return pd.DataFrame({
         'strategy': strategy_returns,
         'equal_weight': equal_weight,
+        'cost_drag': cost_drag,
     })
 
 
-def regime_strategy(spy_returns, vol_forecasts, bond_returns=None):
+def regime_strategy(spy_returns, vol_forecasts, bond_returns=None, cost_per_trade=TRANSACTION_COST):
     """
     Regime-based: discrete equity-bond allocation.
     Low (<15%): 100% SPY | Medium (15-25%): 60/40 | High (>25%): 20/80
+    Monthly rebalance. $5/trade transaction cost (same convention as the other strategies).
     """
     if bond_returns is None:
         bond_returns = pd.Series(0.0004, index=spy_returns.index)  # ~10% annual proxy
@@ -70,8 +78,17 @@ def regime_strategy(spy_returns, vol_forecasts, bond_returns=None):
     equity_weight = equity_weight.resample('ME').last().reindex(spy_returns.index, method='ffill')
     bond_weight = 1.0 - equity_weight
 
-    strategy_returns = equity_weight.shift(1) * spy_returns + bond_weight.shift(1) * bond_returns
-    return pd.DataFrame({'strategy': strategy_returns, 'equity_weight': equity_weight})
+    turnover = equity_weight.diff().abs()
+    cost_drag = turnover * (cost_per_trade / 10000)
+
+    strategy_returns = (equity_weight.shift(1) * spy_returns
+                        + bond_weight.shift(1) * bond_returns
+                        - cost_drag)
+    return pd.DataFrame({
+        'strategy': strategy_returns,
+        'equity_weight': equity_weight,
+        'cost_drag': cost_drag,
+    })
 
 
 def vrp_strategy(
@@ -113,7 +130,7 @@ def vrp_strategy(
 
     Returns:
         pd.DataFrame with columns ['strategy', 'benchmark', 'vrp_signal',
-        'vrp_spread'].
+        'vrp_spread', 'cost_drag'].
     """
     # ── Signal (month-end frequency) ──────────────────────────────────────────
     vrp_spread = iv_series - model_forecasts           # positive → IV > model
@@ -154,11 +171,22 @@ def vrp_strategy(
         'benchmark':  spy_returns,
         'vrp_signal': signal_daily,
         'vrp_spread': vrp_spread_daily,
+        'cost_drag':  cost_drag,
     })
 
 
-def performance_metrics(returns, rf_rate=0.04):
-    """Compute Sharpe, Sortino, max drawdown, Calmar from a return series."""
+def performance_metrics(returns, rf_rate=0.04, cost_drag=None):
+    """
+    Compute Sharpe, Sortino, max drawdown, Calmar from a LOG return series.
+
+    Equity is compounded via exp(cumsum(returns)), not (1+returns).cumprod() —
+    the latter is only valid for simple returns and would silently misstate
+    Max Drawdown/Calmar given this project's log-return convention.
+
+    Pass `cost_drag` (the per-period cost series a strategy function returns)
+    to also report annualized transaction-cost drag as its own line item,
+    rather than leaving it invisible inside `returns`.
+    """
     ann_ret = returns.mean() * 252
     ann_vol = returns.std() * np.sqrt(252)
     sharpe = (ann_ret - rf_rate) / ann_vol if ann_vol > 0 else np.nan
@@ -166,12 +194,12 @@ def performance_metrics(returns, rf_rate=0.04):
     downside = returns[returns < 0].std() * np.sqrt(252)
     sortino = (ann_ret - rf_rate) / downside if downside > 0 else np.nan
 
-    cum = (1 + returns).cumprod()
+    cum = np.exp(returns.cumsum())
     drawdown = (cum / cum.cummax() - 1)
     max_dd = drawdown.min()
     calmar = ann_ret / abs(max_dd) if max_dd != 0 else np.nan
 
-    return {
+    result = {
         'Ann. Return': ann_ret,
         'Ann. Volatility': ann_vol,
         'Sharpe': sharpe,
@@ -179,3 +207,6 @@ def performance_metrics(returns, rf_rate=0.04):
         'Max Drawdown': max_dd,
         'Calmar': calmar,
     }
+    if cost_drag is not None:
+        result['Ann. Cost Drag'] = cost_drag.mean() * 252
+    return result

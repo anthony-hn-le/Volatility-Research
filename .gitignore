@@ -8,5 +8,7 @@ data/raw/
 data/processed/
 models/*.pkl
 models/*.pt
-results/
 .ipynb_checkpoints/
+
+# Unrelated file saved into this folder outside the project's scope; kept on disk, not tracked
+Summer Scholars Final Project Instructions 2024 - Humanities and Social Sciences.docx.pdf

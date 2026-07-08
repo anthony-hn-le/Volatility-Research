@@ -8,8 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Environment Setup
 
+This project has its own `.venv` scoped to this folder — separate from the shared one at the `Quant Projects/` root. Always activate this local one before running anything here.
+
 ```bash
-# Activate the virtual environment
+# Activate the virtual environment (from inside Volatility Research/)
 source .venv/bin/activate
 
 # Install dependencies
@@ -61,17 +63,18 @@ yfinance / Alpha Vantage
 - `HARRVModel` — OLS on daily/weekly/monthly RV lags (Corsi 2009)
 - `RandomForestModel` — includes `StandardScaler` internally
 - `XGBoostModel` — includes early stopping with 15% validation split
+- `LSTMModel` — PyTorch, 2-layer LSTM + linear head, 30-day lookback, early stopping (patience=10)
+- `GARCHHybridModel(ml_model_type='RF'|'XGB')` — appends GARCH fitted vol + standardized residuals as extra features before delegating to `RandomForestModel`/`XGBoostModel`
 
-LSTM is not yet implemented; add it here using PyTorch.
+**`src/evaluation.py`** — `evaluate_forecasts(y_true, forecasts_dict)` returns a DataFrame of RMSE/MAE/QLIKE/DirAcc for all models at once. `regime_evaluation(...)` slices by low/medium/high regime. `diebold_mariano(loss_a, loss_b, h)` and `model_confidence_set(losses_df, size, reps)` (wraps `arch.bootstrap.MCS`) provide statistical-significance testing across models.
 
-**`src/evaluation.py`** — `evaluate_forecasts(y_true, forecasts_dict)` returns a DataFrame of RMSE/MAE/QLIKE/DirAcc for all models at once. `regime_evaluation(...)` slices by low/medium/high regime.
-
-**`src/backtest.py`** — Three strategies:
+**`src/backtest.py`** — Four strategies, all returning a `cost_drag` column and expecting **log returns** as input (matching `src/data.py`'s convention):
 1. `vol_timing_strategy` — SPY/SHY allocation targeting 15% vol (`w = target_vol / forecast_vol`, capped at 1.5×)
 2. `risk_parity_strategy` — inverse-vol weights across all 15 stocks, monthly rebalance
 3. `regime_strategy` — discrete 100/60/20% equity depending on regime
+4. `vrp_strategy` — delta-neutral short-straddle proxy exploiting the IV-vs-forecast spread (VRP)
 
-All strategies apply `$5/trade` transaction cost drag and rebalance monthly (`resample('ME')`). `performance_metrics(returns)` computes Sharpe, Sortino, max drawdown, and Calmar (uses `rf_rate=0.04`).
+All strategies apply `$5/trade` transaction cost drag and rebalance monthly (`resample('ME')`). `performance_metrics(returns, rf_rate=0.04, cost_drag=None)` computes Sharpe, Sortino, max drawdown, and Calmar from the log-return series (`cum = exp(returns.cumsum())`), plus annualized `Ann. Cost Drag` when a `cost_drag` series is passed.
 
 ### Walk-Forward Validation
 

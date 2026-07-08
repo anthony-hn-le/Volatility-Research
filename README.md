@@ -32,22 +32,24 @@ All models are evaluated on 18 equity assets (SPY, QQQ, IWM + 15 stocks) using w
 Volatility Research/
 ├── notebooks/
 │   ├── 01_EDA.ipynb              # Exploratory analysis, regime visualization
-│   ├── 02_garch_baseline.ipynb   # GARCH family + HAR-RV walk-forward
-│   ├── 03_ml_models.ipynb        # Random Forest, XGBoost, hybrid models
-│   ├── 04_results.ipynb          # Statistical + economic evaluation (planned)
-│   └── 05_manuscript.ipynb       # Write-up (planned)
+│   ├── 02_garch_baseline.ipynb   # GARCH family + HAR-RV walk-forward, residual diagnostics
+│   ├── 03_ml_models.ipynb        # RF/XGBoost/LSTM/hybrid models, MCS + Diebold-Mariano
+│   ├── 04_results.ipynb          # Economic evaluation (Week 8) + robustness (Week 9)
+│   └── 05_manuscript.ipynb       # Full manuscript write-up (Week 10)
 ├── src/
 │   ├── data.py                   # Download (yfinance), clean, compute RV, tag regimes
 │   ├── features.py               # Engineer 40–50 predictors, correlation filter
 │   ├── models.py                 # Model wrappers: fit() / forecast() interface
-│   ├── evaluation.py             # RMSE, MAE, QLIKE, directional accuracy
-│   └── backtest.py               # 3 portfolio strategies + performance metrics
+│   ├── evaluation.py             # RMSE, MAE, QLIKE, directional accuracy, DM test, MCS
+│   └── backtest.py               # 4 portfolio strategies + performance metrics
 ├── data/
 │   ├── raw/                      # {TICKER}_daily.csv — regenerate via src/data.py
 │   └── processed/                # prices_clean.csv, realized_vol.csv, features.csv 
 ├── results/
 │   ├── forecast_accuracy_econometric.csv
 │   ├── forecast_accuracy_all_models.csv
+│   ├── model_confidence_set.csv / diebold_mariano_vs_garch.csv
+│   ├── portfolio_performance.csv
 │   ├── feature_importance.csv
 │   └── figures/                  # Publication-quality plots
 └── requirements.txt
@@ -89,13 +91,19 @@ python -c "from src.data import download_prices; download_prices()"
 jupyter lab
 ```
 
-Then execute notebooks sequentially: `01 → 02 → 03 → 04`.
+Then execute notebooks sequentially: `01 → 02 → 03 → 04 → 05`.
 
 To run a notebook non-interactively:
 
 ```bash
 jupyter nbconvert --to notebook --execute notebooks/01_EDA.ipynb
 ```
+
+> **Runtime note:** most notebooks finish in minutes, but `03_ml_models.ipynb`'s LSTM
+> walk-forward (96 refits × 18 assets) takes roughly **24 hours** of wall-clock time on a
+> single machine (see `run_walk_forward.log`). All notebooks cache their forecast CSVs to
+> `data/processed/forecasts_*.csv` and skip recomputation on a subsequent run if that file
+> already exists — a fresh clone's first run is the slow one.
 
 ---
 
@@ -117,8 +125,11 @@ jupyter nbconvert --to notebook --execute notebooks/01_EDA.ipynb
 1. **Volatility Timing** — Dynamic SPY/SHY allocation targeting 15% annualized vol
 2. **Risk Parity** — Inverse-vol weights across 15 stocks, monthly rebalance
 3. **Regime-Based** — Discrete 100/60/20% equity exposure by vol regime
+4. **VRP** — Variance-risk-premium strategy exploiting the implied-vs-forecast vol spread
 
-All strategies apply $5/trade transaction cost drag.
+All strategies apply $5/trade transaction cost drag (reported as its own `Ann. Cost Drag`
+metric) and rebalance monthly. Statistical significance across all 9 models is assessed via
+Diebold-Mariano tests and a 90%-confidence Model Confidence Set.
 
 ---
 
@@ -138,7 +149,10 @@ All strategies apply $5/trade transaction cost drag.
 | Notebook | Status |
 |---|---|
 | 01_EDA | Complete |
-| 02_garch_baseline (econometric walk-forward) | Complete |
-| 03_ml_models (RF, XGBoost, hybrid) | In progress — Week 5/6 |
-| 04_results (full evaluation) | Planned — Week 7 |
-| 05_manuscript | Planned — Week 10 |
+| 02_garch_baseline (econometric walk-forward + residual diagnostics) | Complete |
+| 03_ml_models (RF, XGBoost, LSTM, hybrids, MCS/Diebold-Mariano) | Complete |
+| 04_results (economic evaluation + Week 9 robustness) | Complete |
+| 05_manuscript (full write-up) | Complete |
+
+Weeks 1–10 of the original 10-week plan are done; see `claude-handoff.md` for the detailed
+weekly breakdown and `results/` for every generated table/figure.

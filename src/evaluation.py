@@ -3,6 +3,7 @@ Statistical loss functions and evaluation metrics.
 """
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 
 def rmse(y_true, y_pred):
@@ -60,6 +61,66 @@ def regime_evaluation(y_true, forecasts_dict, regimes):
         subset_preds = {k: v[mask_np] for k, v in forecasts_dict.items()}
         results[regime] = evaluate_forecasts(subset_true, subset_preds)
     return results
+
+
+def diebold_mariano(loss_a: np.ndarray, loss_b: np.ndarray, h: int = 1) -> tuple[float, float]:
+    """
+    Diebold-Mariano test for equal predictive accuracy between two models' losses.
+
+    d_t = loss_a_t - loss_b_t. Under H0 (equal accuracy), E[d_t] = 0. The mean's
+    variance is estimated with a Newey-West HAC estimator using h-1 lags, which
+    accounts for the MA(h-1) autocorrelation induced by h-step-ahead forecast
+    errors (h=1 reduces to the simple sample variance).
+
+    Args:
+        loss_a, loss_b: per-observation losses (e.g. squared error, QLIKE) for
+            the two models being compared, same length, aligned by time.
+        h: forecast horizon in steps (controls the number of HAC lags, h-1).
+
+    Returns:
+        (dm_stat, p_value). Negative dm_stat => model A has lower average loss
+        (more accurate) than model B. p_value is two-sided (vs. the normal CDF).
+    """
+    d = np.asarray(loss_a, dtype=float) - np.asarray(loss_b, dtype=float)
+    d = d[~np.isnan(d)]
+    T = len(d)
+    d_bar = d.mean()
+
+    gamma0 = np.var(d, ddof=0)
+    var_d = gamma0
+    for lag in range(1, h):
+        cov = np.cov(d[lag:], d[:-lag], ddof=0)[0, 1] if T > lag else 0.0
+        var_d += 2 * (1 - lag / h) * cov
+    se = np.sqrt(var_d / T)
+
+    dm_stat = d_bar / se if se > 0 else np.nan
+    p_value = 2 * (1 - norm.cdf(abs(dm_stat)))
+    return float(dm_stat), float(p_value)
+
+
+def model_confidence_set(losses_df: pd.DataFrame, size: float = 0.10,
+                          reps: int = 1000, seed: int = 42) -> pd.DataFrame:
+    """
+    Hansen, Lunde & Nason (2011) Model Confidence Set, via arch.bootstrap.MCS.
+
+    Args:
+        losses_df: T x k DataFrame of per-observation losses (e.g. squared
+            error or QLIKE), one column per model, aligned by row.
+        size: test size (e.g. 0.10 for a 90% confidence set).
+        reps: bootstrap replications.
+
+    Returns:
+        DataFrame indexed by model name with columns ['Pvalue', 'in_mcs'],
+        sorted by p-value descending (models most clearly in the MCS first).
+    """
+    from arch.bootstrap import MCS
+
+    mcs = MCS(losses_df.dropna(), size=size, reps=reps, seed=seed)
+    mcs.compute()
+
+    result = mcs.pvalues.copy()
+    result['in_mcs'] = ~result.index.isin(mcs.excluded)
+    return result.sort_values('Pvalue', ascending=False)
 
 
 def vrp_series(iv_t: pd.Series, rv_realized_t21: pd.Series) -> pd.Series:

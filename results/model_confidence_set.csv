@@ -1,0 +1,10 @@
+Model name,Pvalue,in_mcs
+Random Forest,1.0,True
+LSTM,0.006,False
+HAR-RV,0.006,False
+GARCH-XGBoost,0.006,False
+XGBoost,0.002,False
+GARCH-RF,0.001,False
+"EGARCH(1,1)",0.0,False
+"GJR-GARCH(1,1)",0.0,False
+"GARCH(1,1)",0.0,False
