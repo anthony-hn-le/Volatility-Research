@@ -154,5 +154,13 @@ Diebold-Mariano tests and a 90%-confidence Model Confidence Set.
 | 04_results (economic evaluation + Week 9 robustness) | Complete |
 | 05_manuscript (full write-up) | Complete |
 
-Weeks 1–10 of the original 10-week plan are done; see `claude-handoff.md` for the detailed
-weekly breakdown and `results/` for every generated table/figure.
+Weeks 1–10 of the original 10-week research plan are complete; see `results/` for every
+generated table and figure.
+
+---
+
+## Development Notes
+
+Research design, modeling decisions, and all analysis are the author's. An AI coding
+assistant (Claude Code) was used during development to help implement and debug portions
+of the codebase under the author's direction and review.

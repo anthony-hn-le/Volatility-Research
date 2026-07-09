@@ -9,7 +9,17 @@ import pandas as pd
 
 
 def add_historical_vol_features(df, rv_col='rv_21d'):
-    """Lagged RV, rolling averages, volatility momentum."""
+    """Add lagged realized-volatility, rolling-average, and momentum features.
+
+    Args:
+        df: DataFrame containing `rv_col`.
+        rv_col: Name of the realized-volatility column to derive lags from.
+
+    Returns:
+        `df` with added columns `rv_lag{1,2,3,5,10,20,60}`, `rv_ma{5,20,60}`
+        (rolling means of the once-lagged series), and `rv_momentum_5_20`
+        (short- minus medium-window rolling mean, a volatility trend signal).
+    """
     rv = df[rv_col]
     for lag in [1, 2, 3, 5, 10, 20, 60]:
         df[f'rv_lag{lag}'] = rv.shift(lag)
@@ -20,7 +30,19 @@ def add_historical_vol_features(df, rv_col='rv_21d'):
 
 
 def add_return_features(df, ret_col='return'):
-    """Lagged returns, abs returns, rolling skew/kurtosis, extreme-value flags."""
+    """Add lagged-return, distributional-shape, and extreme-move features.
+
+    Args:
+        df: DataFrame containing `ret_col`.
+        ret_col: Name of the daily log-return column.
+
+    Returns:
+        `df` with added columns `ret_lag{1,2,3,5}`, `absret_lag{1,2,3,5}`,
+        `ret_skew_20`/`ret_kurt_20` (rolling skewness/kurtosis, capturing
+        return-distribution asymmetry and tail risk), `max_abs_ret_20`
+        (20-day maximum absolute return), and `ret_sq_lag1` (lagged squared
+        return, an ARCH-effect proxy).
+    """
     r = df[ret_col]
     for lag in [1, 2, 3, 5]:
         df[f'ret_lag{lag}'] = r.shift(lag)
@@ -33,7 +55,20 @@ def add_return_features(df, ret_col='return'):
 
 
 def add_microstructure_features(df):
-    """High-low range, volume ratio, gap frequency."""
+    """Add intraday range, relative-volume, and price-gap features.
+
+    Args:
+        df: DataFrame with 'High', 'Low', 'Open', 'Close' columns, and
+            optionally 'Volume'.
+
+    Returns:
+        `df` with added columns `hl_range` (Parkinson-style log high-low
+        range, a proxy for intraday volatility) and its 5-day rolling mean
+        `hl_range_ma5`; `volume_ratio` (volume relative to its 20-day mean,
+        if 'Volume' is present); and `gap_freq_20` (fraction of the last 20
+        days with an overnight open-close gap in the top decile of its
+        60-day distribution).
+    """
     df['hl_range'] = (np.log(df['High']) - np.log(df['Low'])).shift(1)
     df['hl_range_ma5'] = df['hl_range'].rolling(5).mean()
     if 'Volume' in df.columns:
@@ -45,7 +80,15 @@ def add_microstructure_features(df):
 
 
 def add_calendar_features(df):
-    """Day-of-week and month-of-year dummies."""
+    """Add day-of-week dummies and a month-of-year column.
+
+    Args:
+        df: DataFrame with a DatetimeIndex.
+
+    Returns:
+        `df` with added columns `dow_{0..4}` (Monday-Friday indicator dummies)
+        and `month` (calendar month, 1-12).
+    """
     df['dow'] = df.index.dayofweek
     df['month'] = df.index.month
     for d in range(5):
@@ -54,10 +97,18 @@ def add_calendar_features(df):
 
 
 def add_market_features(df, vix_df=None, spy_rv=None):
-    """
-    VIX level/change and S&P 500 RV for individual-stock models.
-    vix_df: DataFrame with 'Close' column for ^VIX.
-    spy_rv: Series of SPY realized volatility.
+    """Add market-wide (as opposed to asset-specific) predictors.
+
+    Args:
+        df: DataFrame with a DatetimeIndex to reindex the market series onto.
+        vix_df: DataFrame with a 'Close' column of ^VIX levels, or None to skip.
+        spy_rv: Series of SPY realized volatility, or None to skip.
+
+    Returns:
+        `df` with added columns `vix_level`/`vix_change` (lagged VIX level and
+        percent change, if `vix_df` given) and `spy_rv` (lagged SPY realized
+        volatility, if given) -- market-wide risk signals available to every
+        individual-stock model, not just the three index tickers.
     """
     if vix_df is not None:
         df['vix_level'] = vix_df['Close'].reindex(df.index).shift(1)
@@ -75,22 +126,42 @@ def engineer_features(
     corr_threshold: Optional[float] = 0.95,
     precomputed_drop_cols: Optional[list] = None,
 ):
-    """
-    Full feature engineering pipeline.
-    Returns (X, y) with look-ahead-free features and the target.
+    """Run the full feature engineering pipeline and split into (X, y).
 
-    Correlation filtering is applied one of three ways (in priority order):
+    Applies `add_historical_vol_features`, `add_return_features`,
+    `add_microstructure_features`, `add_calendar_features`, and
+    `add_market_features` in sequence, drops rows with any remaining NaN
+    (from rolling-window warmup), then separates predictors from the target.
+    Every predictor is constructed from information available at or before
+    t-1 relative to the target at t (each feature group applies `.shift(1)`
+    internally), so no look-ahead bias is introduced.
+
+    Correlation filtering is applied one of three ways, in priority order:
       - `precomputed_drop_cols` given: drop exactly these columns, no fitting.
-        Lets a caller (e.g. build_features.py) fit the filter once on a pooled,
-        training-only panel across tickers, then apply the same drop list
-        everywhere — avoiding both (a) a per-ticker filter (which can silently
-        yield a different surviving-column set per ticker) and (b) fitting the
-        filter using any information from the test period.
-      - `corr_threshold` is a float and `precomputed_drop_cols` is None: fit the
-        filter on whatever `X` is passed in (this call's own behavior, unchanged
-        from before — the historical default for direct callers).
+        Lets a caller (e.g. `build_features.py`) fit the filter once on a
+        pooled, training-only panel across tickers, then apply the same drop
+        list everywhere — avoiding both (a) a per-ticker filter, which can
+        yield a different surviving-column set per ticker, and (b) fitting
+        the filter using any information from the test period.
+      - `corr_threshold` is a float and `precomputed_drop_cols` is None: fit
+        the filter on whatever `X` is passed to this call.
       - `corr_threshold` is None and `precomputed_drop_cols` is None: skip
         filtering entirely and return the raw (unfiltered) feature set.
+
+    Args:
+        df: Cleaned per-asset OHLCV DataFrame (output of `data.load_and_clean`).
+        vix_df: Optional DataFrame with 'Close' column of ^VIX levels.
+        spy_rv: Optional Series of SPY realized volatility.
+        target_col: Column in `df` to use as the forecast target.
+        corr_threshold: Absolute pairwise-correlation cutoff for the
+            redundancy filter (applied only when `precomputed_drop_cols`
+            is None); pass None to skip filtering.
+        precomputed_drop_cols: Explicit columns to drop, bypassing filter
+            fitting; takes priority over `corr_threshold`.
+
+    Returns:
+        Tuple `(X, y)`: `X` is the predictor DataFrame after NaN-dropping and
+        correlation filtering; `y` is the aligned target Series.
     """
     df = df.copy()
     df = add_historical_vol_features(df, rv_col=target_col)

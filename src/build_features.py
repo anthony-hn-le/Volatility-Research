@@ -2,24 +2,21 @@
 Build data/processed/features.csv: the feature matrix consumed by the
 ML/hybrid walk-forward notebooks (notebooks/03_ml_models.ipynb).
 
-The previous features.csv on disk was an orphaned artifact: no script or
-notebook in this repo ever called engineer_features() to produce it, and its
-correlation filter (|r|>0.95) had evidently been fit per-ticker rather than
-on a single pooled panel — different tickers ended up with different
-surviving columns (e.g. `rv_lag5` only survived for AMZN/WMT), which breaks
-every downstream consumer that assumes one fixed FEATURE_COLS list (the
-walk-forward loops, and especially LSTMModel's fixed input dimensionality).
+Design requirement: every ticker must produce an identical, fixed-width
+feature column set. Downstream consumers -- the walk-forward loops, and
+especially LSTMModel's fixed input dimensionality -- assume one constant
+FEATURE_COLS list across all 18 tickers and all 96 monthly refits.
 
-This script fixes both problems:
-  1. Builds each ticker's RAW (unfiltered) features via engineer_features()
+Two steps enforce that:
+  1. Build each ticker's RAW (unfiltered) features via engineer_features()
      with the same vix_df/spy_rv inputs for all 18 tickers (spy_rv is passed
      even for SPY itself — mildly redundant there, since it's just SPY's own
      past RV, already visible via rv_lag*, but this guarantees every ticker
      produces the identical column set, which matters more than avoiding one
      redundant column for one asset).
-  2. Fits the |r|>0.95 correlation filter ONCE, on the pooled rows from all
+  2. Fit the |r|>0.95 correlation filter ONCE, on the pooled rows from all
      18 tickers restricted to dates <= TRAIN_END (2017-12-31) -- using zero
-     information from the 2018-2025 test period -- then applies that same
+     information from the 2018-2025 test period -- then apply that same
      drop-column list uniformly across the full panel (train+test, all
      tickers). This is a deliberate middle ground: refitting the filter
      inside every one of the 96 monthly x 18 ticker expanding-window slices

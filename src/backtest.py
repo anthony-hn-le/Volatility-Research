@@ -16,10 +16,29 @@ TARGET_VOL = 15.0       # % annualized
 
 def vol_timing_strategy(spy_returns, vol_forecasts, target_vol=TARGET_VOL,
                         max_leverage=1.5, cost_per_trade=TRANSACTION_COST):
-    """
-    Volatility-timing: allocate SPY/SHY to target constant 15% annualized risk.
-    w_SPY = min(1.5, max(0, target_vol / forecast_vol))
-    Monthly rebalance. $5/trade transaction cost (simplified as fixed drag).
+    """Volatility-timing: scale SPY exposure to target constant annualized risk.
+
+    Implements the classic vol-managed-portfolio construction (Fleming, Kirby
+    & Ostdiek 2001; Moreira & Muir 2017): weight SPY inversely to its
+    forecast volatility so realized portfolio risk is approximately constant
+    over time, with the residual allocated to cash/short-duration bonds (SHY).
+
+        w_SPY = clip(target_vol / forecast_vol, 0, max_leverage)
+
+    Rebalanced monthly; a fixed per-trade cost is applied as a bp drag
+    proportional to turnover.
+
+    Args:
+        spy_returns: Daily log returns for SPY.
+        vol_forecasts: Forecast annualized volatility (%) at rebalance dates,
+            same units as `target_vol`.
+        target_vol: Target annualized portfolio volatility (%).
+        max_leverage: Upper bound on `w_SPY` (no leverage cap below 0).
+        cost_per_trade: Transaction cost in dollars, converted to bp drag.
+
+    Returns:
+        pd.DataFrame with columns ['strategy', 'benchmark', 'weight_spy',
+        'cost_drag'], indexed like `spy_returns`.
     """
     weights = (target_vol / vol_forecasts).clip(0, max_leverage)
     weights = weights.resample('ME').last().reindex(spy_returns.index, method='ffill')
@@ -39,10 +58,22 @@ def vol_timing_strategy(spy_returns, vol_forecasts, target_vol=TARGET_VOL,
 
 
 def risk_parity_strategy(asset_returns, vol_forecasts_df, cost_per_trade=TRANSACTION_COST):
-    """
-    Cross-sectional risk parity: weights inversely proportional to forecasted vol.
-    asset_returns: DataFrame of daily returns (assets as columns).
-    vol_forecasts_df: DataFrame of vol forecasts (same columns).
+    """Cross-sectional risk parity across the 15-stock universe.
+
+    Each asset is weighted inversely to its forecast volatility and weights
+    are normalized to sum to 1, so every asset contributes approximately
+    equal risk to the portfolio rather than equal capital (the equal-weight
+    benchmark this strategy is compared against).
+
+    Args:
+        asset_returns: DataFrame of daily log returns, assets as columns.
+        vol_forecasts_df: DataFrame of forecast volatility, same columns and
+            frequency as `asset_returns`.
+        cost_per_trade: Transaction cost in dollars, converted to bp drag.
+
+    Returns:
+        pd.DataFrame with columns ['strategy', 'equal_weight', 'cost_drag'],
+        indexed like `asset_returns`.
     """
     inv_vol = 1.0 / vol_forecasts_df
     weights = inv_vol.div(inv_vol.sum(axis=1), axis=0)
@@ -62,10 +93,23 @@ def risk_parity_strategy(asset_returns, vol_forecasts_df, cost_per_trade=TRANSAC
 
 
 def regime_strategy(spy_returns, vol_forecasts, bond_returns=None, cost_per_trade=TRANSACTION_COST):
-    """
-    Regime-based: discrete equity-bond allocation.
-    Low (<15%): 100% SPY | Medium (15-25%): 60/40 | High (>25%): 20/80
-    Monthly rebalance. $5/trade transaction cost (same convention as the other strategies).
+    """Discrete equity/bond allocation keyed to the forecast volatility regime.
+
+    Low (<15%): 100% SPY | Medium (15-25%): 60/40 | High (>25%): 20/80.
+    Regime thresholds match the low/medium/high cut points used elsewhere in
+    this project (`data.load_and_clean`'s `regime` column). Rebalanced
+    monthly with the same fixed-cost convention as the other strategies.
+
+    Args:
+        spy_returns: Daily log returns for SPY.
+        vol_forecasts: Forecast annualized volatility (%) at rebalance dates.
+        bond_returns: Daily log returns for the bond sleeve; defaults to a
+            constant ~10%/year proxy if not supplied.
+        cost_per_trade: Transaction cost in dollars, converted to bp drag.
+
+    Returns:
+        pd.DataFrame with columns ['strategy', 'equity_weight', 'cost_drag'],
+        indexed like `spy_returns`.
     """
     if bond_returns is None:
         bond_returns = pd.Series(0.0004, index=spy_returns.index)  # ~10% annual proxy
@@ -176,16 +220,24 @@ def vrp_strategy(
 
 
 def performance_metrics(returns, rf_rate=0.04, cost_drag=None):
-    """
-    Compute Sharpe, Sortino, max drawdown, Calmar from a LOG return series.
+    """Compute annualized risk/return metrics from a daily log-return series.
 
-    Equity is compounded via exp(cumsum(returns)), not (1+returns).cumprod() —
-    the latter is only valid for simple returns and would silently misstate
+    Equity is compounded via `exp(cumsum(returns))`, not `(1+returns).cumprod()`
+    — the latter is only valid for simple returns and would silently misstate
     Max Drawdown/Calmar given this project's log-return convention.
 
-    Pass `cost_drag` (the per-period cost series a strategy function returns)
-    to also report annualized transaction-cost drag as its own line item,
-    rather than leaving it invisible inside `returns`.
+    Args:
+        returns: Daily log-return series (strategy or benchmark).
+        rf_rate: Annualized risk-free rate used in the Sharpe/Sortino excess-
+            return numerator.
+        cost_drag: Optional per-period transaction-cost series (as returned
+            by the strategy functions in this module); if given, its
+            annualized mean is reported separately rather than left implicit
+            inside `returns`.
+
+    Returns:
+        dict with keys 'Ann. Return', 'Ann. Volatility', 'Sharpe', 'Sortino',
+        'Max Drawdown', 'Calmar', and (if `cost_drag` given) 'Ann. Cost Drag'.
     """
     ann_ret = returns.mean() * 252
     ann_vol = returns.std() * np.sqrt(252)

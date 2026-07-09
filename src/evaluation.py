@@ -7,10 +7,12 @@ from scipy.stats import norm
 
 
 def rmse(y_true, y_pred):
+    """Root mean squared error between realized and forecast volatility."""
     return np.sqrt(np.mean((y_true - y_pred) ** 2))
 
 
 def mae(y_true, y_pred):
+    """Mean absolute error between realized and forecast volatility."""
     return np.mean(np.abs(y_true - y_pred))
 
 
@@ -35,9 +37,15 @@ def directional_accuracy(y_true, y_pred):
 
 
 def evaluate_forecasts(y_true, forecasts_dict):
-    """
-    Compute all metrics for a dict of {model_name: y_pred}.
-    Returns a DataFrame with models as rows.
+    """Compute out-of-sample (OOS) accuracy metrics for multiple models at once.
+
+    Args:
+        y_true: Realized volatility over the OOS evaluation period.
+        forecasts_dict: {model_name: y_pred} of aligned forecast series.
+
+    Returns:
+        pd.DataFrame indexed by model name with columns ['RMSE', 'MAE',
+        'QLIKE', 'DirAcc'], sorted ascending by RMSE.
     """
     records = []
     for name, y_pred in forecasts_dict.items():
@@ -52,9 +60,17 @@ def evaluate_forecasts(y_true, forecasts_dict):
 
 
 def regime_evaluation(y_true, forecasts_dict, regimes):
-    """
-    Evaluate forecasts separately for low/medium/high volatility regimes.
-    regimes: Series with values 'low', 'medium', 'high', aligned to y_true.
+    """Evaluate forecasts separately within each volatility regime.
+
+    Args:
+        y_true: Realized volatility over the OOS evaluation period.
+        forecasts_dict: {model_name: y_pred} of aligned forecast series.
+        regimes: Categorical series with values 'low'/'medium'/'high',
+            aligned to `y_true` (see `data.load_and_clean`'s `regime` column).
+
+    Returns:
+        dict {regime_name: DataFrame}, one `evaluate_forecasts` result per
+        regime; regimes with fewer than 10 observations are omitted.
     """
     results = {}
     regimes = pd.array(regimes)  # ensure consistent comparison (handles Categorical too)

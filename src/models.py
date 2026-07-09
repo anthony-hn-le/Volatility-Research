@@ -31,15 +31,28 @@ from torch.utils.data import DataLoader, TensorDataset
 
 
 class GARCHModel:
-    """
-    GARCH-family wrapper.
+    """Wrapper around `arch.arch_model` for the GARCH family of conditional-
+    variance models (Engle 1982; Bollerslev 1986).
 
     vol='Garch', o=0  → GARCH(p,q)
-    vol='Garch', o=1  → GJR-GARCH(p,o,q)  (asymmetric; o is the leverage term)
-    vol='EGARCH'      → EGARCH(p,q)
+    vol='Garch', o=1  → GJR-GARCH(p,o,q)  (asymmetric; o is the leverage term,
+                         capturing the stylized fact that negative returns
+                         raise future volatility more than positive returns
+                         of equal magnitude; Glosten, Jagannathan & Runkle 1993)
+    vol='EGARCH'      → EGARCH(p,q)       (Nelson 1991; models log-variance,
+                         so no non-negativity constraint on parameters)
     """
 
     def __init__(self, vol: str = 'Garch', p: int = 1, o: int = 0, q: int = 1) -> None:
+        """
+        Args:
+            vol: Conditional-variance specification passed to `arch_model`
+                ('Garch' or 'EGARCH'; see class docstring for the o=0/o=1
+                distinction under 'Garch').
+            p: ARCH order (lagged squared innovations).
+            o: Asymmetric/leverage order (0 = symmetric GARCH, 1 = GJR-GARCH).
+            q: GARCH order (lagged conditional variance).
+        """
         self.vol = vol
         self.p = p
         self.o = o   # asymmetric/leverage order (0 = symmetric GARCH, 1 = GJR-GARCH)
@@ -47,6 +60,18 @@ class GARCHModel:
         self.result: Optional[ARCHModelResult] = None
 
     def fit(self, returns: pd.Series, y=None) -> "GARCHModel":
+        """Fit the conditional-variance model via maximum likelihood.
+
+        Args:
+            returns: Daily log returns. Internally rescaled by 100 (i.e. to
+                percent units), which is `arch`'s recommended scale for
+                numerical stability of the MLE optimizer.
+            y: Unused; present only so this wrapper matches the `fit(X, y)`
+                interface shared by the ML model wrappers.
+
+        Returns:
+            self, with `self.result` set to the fitted `ARCHModelResult`.
+        """
         model = arch_model(
             returns * 100,
             vol=cast(_ArchVolLiteral, self.vol),
@@ -56,12 +81,19 @@ class GARCHModel:
         return self
 
     def forecast(self, horizon: int = 1) -> np.ndarray:
-        """
-        Return h-step-ahead annualized vol forecasts (% annual), shape (horizon,).
+        """Forecast conditional volatility 1..horizon steps ahead.
 
-        EGARCH does not support analytic multi-step forecasts (arch library
-        limitation); the method falls back to simulation-based forecasting
-        (200 paths) automatically when `horizon > 1` and analytic fails.
+        EGARCH does not support analytic multi-step forecasts (an `arch`
+        library limitation); this method falls back to simulation-based
+        forecasting (200 paths) automatically when `horizon > 1` and the
+        analytic method fails.
+
+        Args:
+            horizon: Number of steps ahead to forecast.
+
+        Returns:
+            np.ndarray of shape (horizon,): annualized volatility forecasts
+            in percent, on the same `rv_21d` scale as the realized-vol target.
         """
         assert self.result is not None, "Call fit() before forecast()"
         try:
@@ -76,7 +108,13 @@ class GARCHModel:
 
 
 class HARRVModel:
-    """HAR-RV: OLS regression on daily, weekly, monthly RV lags (Corsi 2009)."""
+    """Heterogeneous Autoregressive model of Realized Volatility (Corsi 2009).
+
+    OLS regression of RV_t on its own daily (t-1), weekly (5-day mean), and
+    monthly (22-day mean) lags -- a parsimonious way to capture the
+    long-memory / multi-horizon persistence typically observed in realized
+    volatility without a full ARFIMA specification.
+    """
 
     def __init__(self) -> None:
         from statsmodels.regression.linear_model import OLS
@@ -96,6 +134,17 @@ class HARRVModel:
         return X.iloc[21:]  # drop NaN warmup
 
     def fit(self, rv_series: pd.Series, y=None) -> "HARRVModel":
+        """Fit the daily/weekly/monthly RV-lag regression via OLS.
+
+        Args:
+            rv_series: Realized-volatility series (e.g. `rv_21d`), in the
+                same units as the target this model forecasts.
+            y: Unused; present only so this wrapper matches the `fit(X, y)`
+                interface shared by the ML model wrappers.
+
+        Returns:
+            self, with `self.result` set to the fitted `RegressionResults`.
+        """
         X = self._build_X(rv_series)
         target = rv_series.values[22:]
         X_const = self._add_constant(X.dropna())
@@ -104,6 +153,16 @@ class HARRVModel:
         return self
 
     def forecast(self, rv_series: Optional[pd.Series] = None) -> float:
+        """One-step-ahead RV forecast from the fitted HAR-RV regression.
+
+        Args:
+            rv_series: Realized-volatility series to forecast from; defaults
+                to the series passed to `fit()`.
+
+        Returns:
+            Scalar one-step-ahead volatility forecast, same units as the
+            fitted target.
+        """
         assert self.result is not None, "Call fit() before forecast()"
         if rv_series is None:
             rv_series = self._last_rv
@@ -174,7 +233,13 @@ class HARXModel(HARRVModel):
 
 
 class RandomForestModel:
-    """Random Forest with StandardScaler."""
+    """Random Forest regressor with an internal StandardScaler.
+
+    Ensemble of bagged regression trees (Breiman 2001); feature scaling is
+    not statistically required for tree-based models but is applied here for
+    a consistent preprocessing interface across the ML wrappers in this
+    module (some of which, like LSTMModel, do require it).
+    """
 
     def __init__(
         self,
@@ -192,22 +257,54 @@ class RandomForestModel:
         self.scaler = StandardScaler()
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "RandomForestModel":
+        """Fit the scaler and the forest on the training window.
+
+        Args:
+            X: Feature matrix (see `features.engineer_features`).
+            y: Target series (realized volatility), aligned to `X`.
+
+        Returns:
+            self.
+        """
         X_scaled = self.scaler.fit_transform(X)
         self.model.fit(X_scaled, y)
         return self
 
     def forecast(self, X_new: pd.DataFrame) -> float:
+        """Predict the target for a single new feature row.
+
+        Args:
+            X_new: One-row feature DataFrame, same columns as the training `X`.
+
+        Returns:
+            Scalar volatility forecast.
+        """
         X_scaled = self.scaler.transform(X_new)
         return float(self.model.predict(X_scaled)[0])
 
     def feature_importance(self, feature_names) -> pd.Series:
+        """Mean decrease in impurity per feature, sorted descending.
+
+        Args:
+            feature_names: Column labels matching the order used in `fit()`.
+
+        Returns:
+            pd.Series indexed by feature name.
+        """
         return pd.Series(
             self.model.feature_importances_, index=feature_names
         ).sort_values(ascending=False)
 
 
 class XGBoostModel:
-    """XGBoost with early stopping."""
+    """Gradient-boosted trees (Chen & Guestrin 2016) with early stopping.
+
+    Early stopping uses a chronological hold-out validation split (the most
+    recent `val_size` fraction of the training window, not a random split,
+    to respect the time-series ordering) to select the boosting round with
+    the lowest validation loss, guarding against overfitting the training
+    window.
+    """
 
     def __init__(
         self,
@@ -229,6 +326,17 @@ class XGBoostModel:
         self.scaler = StandardScaler()
 
     def fit(self, X: pd.DataFrame, y: pd.Series, val_size: float = 0.15) -> "XGBoostModel":
+        """Fit the scaler and the boosted-tree ensemble with early stopping.
+
+        Args:
+            X: Feature matrix, chronologically ordered.
+            y: Target series (realized volatility), aligned to `X`.
+            val_size: Fraction of the most recent rows held out as the
+                early-stopping validation set (chronological, not random).
+
+        Returns:
+            self.
+        """
         n_val = max(1, int(len(X) * val_size))
         X_tr, X_val = X.iloc[:-n_val], X.iloc[-n_val:]
         y_tr, y_val = y.iloc[:-n_val], y.iloc[-n_val:]
@@ -239,6 +347,14 @@ class XGBoostModel:
         return self
 
     def forecast(self, X_new: pd.DataFrame) -> float:
+        """Predict the target for a single new feature row.
+
+        Args:
+            X_new: One-row feature DataFrame, same columns as the training `X`.
+
+        Returns:
+            Scalar volatility forecast.
+        """
         assert self.model is not None, "Call fit() before forecast()"
         X_scaled = self.scaler.transform(X_new)
         return float(self.model.predict(X_scaled)[0])
@@ -357,6 +473,19 @@ class LSTMModel:
         return np.array(seqs, dtype=np.float32), np.array(targets, dtype=np.float32)
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "LSTMModel":
+        """Build sliding windows, scale, and train the LSTM with early stopping.
+
+        Args:
+            X: Feature matrix, chronologically ordered; must have at least
+                `lookback + 1` rows.
+            y: Target series (realized volatility), aligned to `X`.
+
+        Returns:
+            self.
+
+        Raises:
+            ValueError: If fewer than 2 sliding windows can be built from `X`.
+        """
         torch.manual_seed(self.random_state)
         np.random.seed(self.random_state)
 
@@ -388,6 +517,19 @@ class LSTMModel:
         return self
 
     def forecast(self, X_new: pd.DataFrame) -> float:
+        """Forecast the target for the next step.
+
+        Args:
+            X_new: A single new feature row (slides into the window stored
+                from `fit()`), or a full `lookback`-row feature window.
+
+        Returns:
+            Scalar volatility forecast, inverse-transformed back to the
+            target's original units.
+
+        Raises:
+            ValueError: If `X_new` has neither 1 nor `lookback` rows.
+        """
         assert self._net is not None, "Call fit() before forecast()"
 
         X_new_scaled = self._x_scaler.transform(X_new).astype(np.float32)
@@ -456,29 +598,38 @@ class GARCHHybridModel:
 
     def fit(self, X: pd.DataFrame, y: pd.Series,
             returns: pd.Series) -> "GARCHHybridModel":
+        """Fit the GARCH stage, augment features with its output, then fit the ML stage.
+
+        Args:
+            X: Feature matrix from `features.engineer_features`.
+            y: Target series (realized volatility), aligned to `X`.
+            returns: Daily log-return series used to fit the internal GARCHModel.
+
+        Returns:
+            self.
+        """
         # Fit GARCH on the full returns series available at time T
         self._garch.fit(returns)
         result = self._garch.result
 
-        # NOTE on two train/inference mismatches previously present here (both fixed below):
+        # Two conventions must match between the training features built here and the
+        # forecast-time features built in forecast(), or the ML model learns a mapping
+        # that is systematically off at inference time:
         #
-        # (1) SCALE: result.conditional_volatility is daily-scale (fit on returns*100,
-        # not annualized), but GARCHModel.forecast() -- used below for the forecast-time
-        # value of this same feature slot -- annualizes via `* sqrt(252)`. Training on
-        # the raw daily-scale value while forecasting with the annualized value put the
-        # ML model's "garch_fitted_vol" feature roughly sqrt(252)~=15.87x out of scale
-        # between train and inference. Fixed by annualizing here too.
+        # (1) SCALE: result.conditional_volatility is on the daily, fit-time scale
+        # (the model was fit on returns*100), while GARCHModel.forecast() -- used at
+        # forecast() time for this same feature slot -- reports annualized vol via
+        # `* sqrt(252)`. Annualizing cond_vol here keeps "garch_fitted_vol" on the same
+        # scale in training and inference.
         #
-        # (2) LOOK-AHEAD: cond_vol[t] itself is already a genuine one-step-ahead quantity
-        # (equals result.forecast(start=t-1, horizon=1)), so it aligns correctly with
-        # X[t]'s "info through t-1" convention with no further shift needed. But
-        # std_resid[t] = resid_t / cond_vol[t], where resid_t is the demeaned return
-        # REALIZED on day t (corr(resid_t, return_t) ~= 1.0) -- i.e. it requires
-        # same-day information, unlike every other feature in this codebase (all
-        # `.shift(1)`'d). Left unshifted, the ML model trained on a feature that leaked
-        # day-t's own move into predicting day-t's target, then at forecast() time only
-        # ever saw a genuinely-lagged value (`std_resid.iloc[-1]`, the last available
-        # residual as of T) -- fixed by shifting by 1 to match.
+        # (2) LOOK-AHEAD: cond_vol[t] is already a one-step-ahead quantity (equivalent to
+        # result.forecast(start=t-1, horizon=1)), so it aligns with X[t]'s "information
+        # through t-1" convention with no further shift needed. std_resid[t], however,
+        # equals resid_t / cond_vol[t], where resid_t is the demeaned return realized ON
+        # day t -- same-day information, unlike every other feature in this codebase
+        # (all `.shift(1)`'d). It is shifted by one day below so the ML model is trained
+        # on the same genuinely-lagged quantity (`std_resid.iloc[-1]` as of T) that
+        # forecast() supplies at inference time.
         cond_vol = result.conditional_volatility * np.sqrt(252)  # annualize (% of return -> % p.a.)
         std_resid = result.resid / result.conditional_volatility
 
@@ -498,6 +649,14 @@ class GARCHHybridModel:
         return self
 
     def forecast(self, X_new: pd.DataFrame) -> float:
+        """Predict the target using the cached GARCH output plus new features.
+
+        Args:
+            X_new: One-row feature DataFrame, same columns as the training `X`.
+
+        Returns:
+            Scalar volatility forecast.
+        """
         assert self._ml is not None, "Call fit() before forecast()"
         X_aug = X_new.copy()
         X_aug['garch_fitted_vol'] = self._garch_fc_vol

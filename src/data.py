@@ -34,7 +34,18 @@ IV_CACHE_PATH = os.path.join('data', 'processed', 'iv_monthly.csv')
 
 
 def download_prices(assets=ASSETS, start=START_DATE, end=END_DATE, raw_dir='data/raw'):
-    """Download daily OHLCV from yfinance and save one CSV per asset."""
+    """Download daily OHLCV bars from yfinance and cache one CSV per asset.
+
+    Args:
+        assets: Ticker symbols to download.
+        start: Start date (inclusive), 'YYYY-MM-DD'.
+        end: End date (exclusive), 'YYYY-MM-DD'.
+        raw_dir: Output directory; one `{ticker}_daily.csv` is written per asset.
+
+    Returns:
+        dict mapping ticker -> raw OHLCV DataFrame (tickers with no data
+        returned by yfinance are omitted and logged as a warning).
+    """
     os.makedirs(raw_dir, exist_ok=True)
     results = {}
     for ticker in assets:
@@ -51,9 +62,19 @@ def download_prices(assets=ASSETS, start=START_DATE, end=END_DATE, raw_dir='data
 
 
 def compute_realized_vol(df, window=21):
-    """
-    Realized volatility: annualized rolling std of daily log returns.
-    Returns series in percent (e.g., 15.0 = 15%).
+    """Realized volatility proxy: annualized rolling std. of daily log returns.
+
+    RV_t = std(r_{t-window+1}, ..., r_t) * sqrt(252) * 100, where r is the
+    daily log return. This is the target variable (`rv_21d` at window=21)
+    forecast by every model in this project; it is not an intraday RV
+    estimator, which would require tick-level data unavailable at this scale.
+
+    Args:
+        df: DataFrame with a 'Close' column.
+        window: Rolling window length in trading days.
+
+    Returns:
+        pd.Series named 'rv_{window}d', in percent (e.g. 15.0 = 15% annualized).
     """
     log_returns = np.log(df['Close'] / df['Close'].shift(1))
     rv = log_returns.rolling(window).std() * np.sqrt(252) * 100
@@ -61,7 +82,20 @@ def compute_realized_vol(df, window=21):
 
 
 def load_and_clean(ticker, raw_dir='data/raw'):
-    """Load raw CSV, compute returns and RV, return cleaned DataFrame."""
+    """Load a ticker's cached raw CSV and derive returns, RV, and regime.
+
+    Adds three columns to the raw OHLCV frame: `return` (daily log return),
+    `rv_21d` (21-day realized volatility, see `compute_realized_vol`), and
+    `regime` (a categorical cut of `rv_21d` into low/medium/high volatility
+    states, thresholds at 15% and 25% annualized).
+
+    Args:
+        ticker: Asset symbol; expects `{raw_dir}/{ticker}_daily.csv` to exist.
+        raw_dir: Directory containing the cached raw CSVs.
+
+    Returns:
+        pd.DataFrame indexed by Date, sorted ascending, with the added columns.
+    """
     path = os.path.join(raw_dir, f'{ticker}_daily.csv')
     df = pd.read_csv(path, index_col=0, parse_dates=True)
     df.index.name = 'Date'
@@ -77,7 +111,16 @@ def load_and_clean(ticker, raw_dir='data/raw'):
 
 
 def build_master_prices(assets=ASSETS, raw_dir='data/raw', processed_dir='data/processed'):
-    """Merge close prices for all assets into a single wide DataFrame."""
+    """Merge close prices for all assets into a single wide DataFrame.
+
+    Args:
+        assets: Ticker symbols to include as columns.
+        raw_dir: Directory containing the per-ticker raw CSVs.
+        processed_dir: Output directory for `prices_clean.csv`.
+
+    Returns:
+        pd.DataFrame indexed by Date, one column of close prices per ticker.
+    """
     os.makedirs(processed_dir, exist_ok=True)
     closes = {}
     for ticker in assets:
@@ -89,7 +132,16 @@ def build_master_prices(assets=ASSETS, raw_dir='data/raw', processed_dir='data/p
 
 
 def build_realized_vol_matrix(assets=ASSETS, raw_dir='data/raw', processed_dir='data/processed'):
-    """Build asset × date matrix of realized volatility."""
+    """Build a date x asset matrix of 21-day realized volatility.
+
+    Args:
+        assets: Ticker symbols to include as columns.
+        raw_dir: Directory containing the per-ticker raw CSVs.
+        processed_dir: Output directory for `realized_vol.csv`.
+
+    Returns:
+        pd.DataFrame indexed by Date, one column of `rv_21d` (%) per ticker.
+    """
     os.makedirs(processed_dir, exist_ok=True)
     rvs = {}
     for ticker in assets:

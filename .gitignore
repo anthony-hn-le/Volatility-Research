@@ -20,3 +20,8 @@ Volatility_Research_Progress_Report.docx
 Anthony - Summer Research Proposal.pdf
 run_walk_forward.log
 BACKTESTING_IDEAS.md
+
+# Internal planning notes (research spec, weekly plan) -- dev-time reference only,
+# not part of the release; kept on disk, not tracked in git. Still visible in
+# git history prior to this move (not scrubbed), just not tracked going forward.
+dev-notes/
