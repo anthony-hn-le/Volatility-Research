@@ -1,6 +1,6 @@
 Model,Compute Cost,Wall-clock (s),RMSE (h1),In 90% MCS?,Best Strategy,Best Sharpe,"vs. GARCH(1,1) (same strategy)"
 "GJR-GARCH(1,1)","Low (secs-min, part of ~15-25min/4 models combined)",,6.949,False,VRP,2.963,0.833
-LSTM,Very High,14351.0,5.138,False,VRP,2.954,0.824
+LSTM,Very High,86864.0,5.138,False,VRP,2.954,0.824
 HAR-X,"Very Low (OLS, negligible)",,1.81,True,VRP,2.86,0.73
 GARCH-RF,Medium,1005.0,2.098,False,VRP,2.793,0.662
 HAR-RV,"Very Low (OLS, negligible)",,1.825,True,VRP,2.79,0.66
