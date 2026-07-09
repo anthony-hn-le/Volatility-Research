@@ -1,4 +1,4 @@
-# Equity Volatility Forecasting: ML vs. Econometric Models
+# Does Anything Beat a Naive Forecast? Machine Learning, GARCH, and Equity Volatility
 
 **Author:** Anthony Le (Denison University, Class of 2027)  
 **Supervisors:** Dr. Emily Marshall & Dr. Tyler Wake (Denison Economics)  
@@ -8,7 +8,7 @@
 
 ## Research Questions
 
-1. **Statistical Accuracy** — Do ML and hybrid models significantly reduce out-of-sample forecast errors (RMSE, QLIKE) vs. parametric benchmarks?
+1. **Statistical Accuracy** — Do ML and hybrid models significantly reduce out-of-sample forecast errors (RMSE, QLIKE) vs. parametric benchmarks *and a naive persistence floor*, under more than one loss function?
 2. **Economic Utility** — Does superior statistical accuracy translate into higher risk-adjusted returns in portfolio applications?
 3. **Regime Resilience** — How do models perform during market stress vs. calm periods?
 
@@ -18,7 +18,8 @@
 
 | Category | Models |
 |---|---|
-| Econometric | GARCH(1,1), EGARCH(1,1), GJR-GARCH(1,1), HAR-RV |
+| Econometric | GARCH(1,1), EGARCH(1,1), GJR-GARCH(1,1), HAR-RV, HAR-X |
+| Naive baseline | Persistence (tomorrow = today, no fitting) |
 | Machine Learning | Random Forest, XGBoost, LSTM (PyTorch) |
 | Hybrid | GARCH-RF, GARCH-XGBoost |
 
@@ -128,8 +129,9 @@ jupyter nbconvert --to notebook --execute notebooks/01_EDA.ipynb
 4. **VRP** — Variance-risk-premium strategy exploiting the implied-vs-forecast vol spread
 
 All strategies apply $5/trade transaction cost drag (reported as its own `Ann. Cost Drag`
-metric) and rebalance monthly. Statistical significance across all 9 models is assessed via
-Diebold-Mariano tests and a 90%-confidence Model Confidence Set.
+metric) and rebalance monthly. Statistical significance across all 11 models is assessed via
+Diebold-Mariano tests and a 90%-confidence Model Confidence Set, under both squared-error and
+QLIKE loss.
 
 ---
 
@@ -138,6 +140,7 @@ Diebold-Mariano tests and a 90%-confidence Model Confidence Set.
 - Engle (1982); Bollerslev (1986); Nelson (1991) — ARCH/GARCH/EGARCH foundations
 - Corsi (2009) — HAR-RV model
 - Hansen & Lunde (2005) — "Does Anything Beat GARCH(1,1)?"
+- Patton (2011) — QLIKE loss for imperfect volatility proxies
 - Gu, Kelly & Xiu (2020) — ML for asset pricing
 - Moreira & Muir (2017) — Volatility-managed portfolios
 - Fleming, Kirby & Ostdiek (2001, 2003) — Economic value of volatility timing
