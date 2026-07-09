@@ -1,7 +1,7 @@
 # Equity Volatility Forecasting: ML vs. Econometric Models
 
 **Author:** Anthony Le (Denison University, Class of 2027)  
-**Supervisors:** Emily Marshall & Tyler Wake (Denison Economics)  
+**Supervisors:** Dr. Emily Marshall & Dr. Tyler Wake (Denison Economics)  
 **Timeline:** 10-week summer research, May–August 2026
 
 ---
