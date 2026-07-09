@@ -27,6 +27,10 @@ plotly==6.7.0
 jupyterlab==4.5.7
 python-dotenv==1.2.2
 
+# Manuscript PDF export only (notebooks/05_manuscript.ipynb -> docs/manuscript.pdf via
+# `jupyter nbconvert --to webpdf`); run `playwright install chromium` once after installing.
+playwright==1.61.0
+
 # Note: TensorFlow does not support Python 3.14 as of May 2026.
 # PyTorch (torch) is used for LSTM implementation instead.
 # Note: pandas_datareader has a Python 3.14 compatibility bug.
