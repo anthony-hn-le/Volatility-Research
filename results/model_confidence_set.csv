@@ -1,10 +1,12 @@
 Model name,Pvalue,in_mcs
-Random Forest,1.0,True
-LSTM,0.006,False
-HAR-RV,0.006,False
-GARCH-XGBoost,0.006,False
-XGBoost,0.002,False
-GARCH-RF,0.001,False
+HAR-X,1.0,True
+Persistence,0.224,True
+HAR-RV,0.224,True
+XGBoost,0.001,False
+GARCH-XGBoost,0.001,False
+LSTM,0.001,False
 "EGARCH(1,1)",0.0,False
 "GJR-GARCH(1,1)",0.0,False
 "GARCH(1,1)",0.0,False
+Random Forest,0.0,False
+GARCH-RF,0.0,False

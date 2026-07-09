@@ -1,0 +1,11 @@
+Model,DM stat,p-value,Beats Persistence
+HAR-X,-1.6335,0.1024,False
+HAR-RV,-1.0603,0.289,False
+LSTM,3.5345,0.0004,False
+GARCH-XGBoost,3.6455,0.0003,False
+XGBoost,3.7735,0.0002,False
+GARCH-RF,5.1117,0.0,False
+Random Forest,6.1517,0.0,False
+"EGARCH(1,1)",7.9071,0.0,False
+"GARCH(1,1)",10.1935,0.0,False
+"GJR-GARCH(1,1)",10.7767,0.0,False

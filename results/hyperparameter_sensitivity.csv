@@ -1,0 +1,7 @@
+model,param,value,RMSE_h1_SPY
+XGBoost,max_depth,3,2.0408
+XGBoost,max_depth,4,1.9211
+XGBoost,max_depth,6,2.0871
+Random Forest,n_estimators,300,1.0258
+Random Forest,n_estimators,500,1.0452
+Random Forest,n_estimators,1000,1.0044

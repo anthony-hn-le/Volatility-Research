@@ -2,6 +2,8 @@
 Feature engineering: ~40-50 predictors for ML models.
 All features are constructed using only past information (no look-ahead).
 """
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 
@@ -65,10 +67,30 @@ def add_market_features(df, vix_df=None, spy_rv=None):
     return df
 
 
-def engineer_features(df, vix_df=None, spy_rv=None, target_col='rv_21d', corr_threshold=0.95):
+def engineer_features(
+    df,
+    vix_df=None,
+    spy_rv=None,
+    target_col='rv_21d',
+    corr_threshold: Optional[float] = 0.95,
+    precomputed_drop_cols: Optional[list] = None,
+):
     """
     Full feature engineering pipeline.
     Returns (X, y) with look-ahead-free features and the target.
+
+    Correlation filtering is applied one of three ways (in priority order):
+      - `precomputed_drop_cols` given: drop exactly these columns, no fitting.
+        Lets a caller (e.g. build_features.py) fit the filter once on a pooled,
+        training-only panel across tickers, then apply the same drop list
+        everywhere — avoiding both (a) a per-ticker filter (which can silently
+        yield a different surviving-column set per ticker) and (b) fitting the
+        filter using any information from the test period.
+      - `corr_threshold` is a float and `precomputed_drop_cols` is None: fit the
+        filter on whatever `X` is passed in (this call's own behavior, unchanged
+        from before — the historical default for direct callers).
+      - `corr_threshold` is None and `precomputed_drop_cols` is None: skip
+        filtering entirely and return the raw (unfiltered) feature set.
     """
     df = df.copy()
     df = add_historical_vol_features(df, rv_col=target_col)
@@ -85,10 +107,12 @@ def engineer_features(df, vix_df=None, spy_rv=None, target_col='rv_21d', corr_th
     X = df[feature_cols]
     y = df[target_col]
 
-    # Correlation filtering
-    corr_matrix = X.corr().abs()
-    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    drop_cols = [col for col in upper.columns if any(upper[col] > corr_threshold)]
-    X = X.drop(columns=drop_cols)
+    if precomputed_drop_cols is not None:
+        X = X.drop(columns=[c for c in precomputed_drop_cols if c in X.columns])
+    elif corr_threshold is not None:
+        corr_matrix = X.corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        drop_cols = [col for col in upper.columns if any(upper[col] > corr_threshold)]
+        X = X.drop(columns=drop_cols)
 
     return X, y

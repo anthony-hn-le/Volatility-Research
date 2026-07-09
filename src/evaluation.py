@@ -14,11 +14,17 @@ def mae(y_true, y_pred):
     return np.mean(np.abs(y_true - y_pred))
 
 
-def qlike(y_true, y_pred):
-    """Quasi-likelihood loss: robust to imperfect volatility proxies."""
+def qlike_loss(y_true, y_pred):
+    """Per-observation QLIKE loss (un-averaged) -- needed by DM/MCS, which
+    require a loss *series*, not the aggregate scalar `qlike()` returns."""
     y_pred = np.clip(y_pred, 1e-6, None)   # guard against zero/negative forecasts
     ratio = y_true / (y_pred ** 2)
-    return np.mean(ratio - np.log(ratio) - 1)
+    return ratio - np.log(ratio) - 1
+
+
+def qlike(y_true, y_pred):
+    """Quasi-likelihood loss: robust to imperfect volatility proxies."""
+    return np.mean(qlike_loss(y_true, y_pred))
 
 
 def directional_accuracy(y_true, y_pred):

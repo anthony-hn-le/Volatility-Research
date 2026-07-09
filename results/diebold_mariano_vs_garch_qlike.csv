@@ -1,0 +1,11 @@
+Model,DM stat,p-value,"Beats GARCH(1,1)"
+GARCH-XGBoost,-6.8404,0.0,True
+XGBoost,-6.7536,0.0,True
+LSTM,-5.4661,0.0,True
+GARCH-RF,-5.26,0.0,True
+HAR-RV,-5.0398,0.0,True
+Random Forest,-4.7905,0.0,True
+Persistence,-4.7213,0.0,True
+HAR-X,-4.6152,0.0,True
+"GJR-GARCH(1,1)",-1.1218,0.262,False
+"EGARCH(1,1)",0.4454,0.656,False

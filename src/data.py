@@ -152,3 +152,42 @@ def fetch_index_iv(
     print(f"Saved → {cache}  |  Available: {available}  |  NaN cols: "
           f"{[c for c in INDEX_TICKERS if iv[c].isna().all()]}")
     return iv
+
+
+def fetch_vix_daily(
+    start: str = START_DATE,
+    end: str = END_DATE,
+    processed_dir: str = 'data/processed',
+) -> pd.Series:
+    """
+    Daily ^VIX close series (2010-2025), in percent (e.g. 18.5 = 18.5%).
+
+    Distinct from fetch_index_iv()'s month-end IV cache (used by the VRP
+    backtest strategy at monthly frequency) — this is a daily series for use
+    as a daily feature (engineer_features()'s `vix_df` arg, HARXModel's
+    exogenous regressor). SPY's ^VIX is used as a market-wide proxy for every
+    ticker, including the 15 non-index single stocks — VIX is a market-wide
+    "fear gauge", not asset-specific, so this is a deliberate, standard choice
+    rather than an attempt at a per-stock implied-vol series.
+
+    Cache-first: if data/processed/vix_daily.csv already exists the function
+    loads and returns it immediately without hitting the network.
+    """
+    os.makedirs(processed_dir, exist_ok=True)
+    cache = os.path.join(processed_dir, 'vix_daily.csv')
+
+    if os.path.exists(cache):
+        print(f"Loading daily VIX from cache: {cache}")
+        return pd.read_csv(cache, index_col=0, parse_dates=True)['VIX']
+
+    raw = yf.download('^VIX', start=start, end=end, progress=False, auto_adjust=True)
+    if raw is None or raw.empty:
+        raise RuntimeError("yfinance returned no data for ^VIX")
+    raw.columns = raw.columns.get_level_values(0)  # type: ignore[assignment]
+
+    vix = raw['Close'].rename('VIX')
+    vix.index.name = 'Date'
+    vix.to_frame().to_csv(cache)
+    print(f"Saved → {cache}  |  {len(vix)} daily rows  |  "
+          f"range {vix.min():.1f}–{vix.max():.1f}%")
+    return vix

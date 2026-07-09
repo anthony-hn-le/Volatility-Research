@@ -9,6 +9,14 @@ data/processed/
 models/*.pkl
 models/*.pt
 .ipynb_checkpoints/
+.claude/
 
 # Unrelated file saved into this folder outside the project's scope; kept on disk, not tracked
 Summer Scholars Final Project Instructions 2024 - Humanities and Social Sciences.docx.pdf
+
+# Administrative/reference documents -- kept on disk, not tracked in git
+Volatility_Research_Progress_Report.pdf
+Volatility_Research_Progress_Report.docx
+Anthony - Summer Research Proposal.pdf
+run_walk_forward.log
+BACKTESTING_IDEAS.md

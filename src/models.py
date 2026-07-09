@@ -108,8 +108,69 @@ class HARRVModel:
         if rv_series is None:
             rv_series = self._last_rv
         rv: np.ndarray = rv_series.to_numpy(dtype=float)  # type: ignore[union-attr]
-        x_new = np.array([rv[-1], np.mean(rv[-5:]), np.mean(rv[-22:]), 1.0])
-        return float(self.result.params @ x_new)
+        # Build x_new as a named-column row and use result.predict() (which aligns
+        # by column name against self.result.params) rather than a manual
+        # `params @ x_new` dot product. add_constant()'s default prepends 'const'
+        # as the FIRST column (['const','rv_d','rv_w','rv_m']), so a manual
+        # positional array ending in the constant would silently misalign every
+        # coefficient by one slot -- has_constant='add' forces the constant
+        # column even though a single-row frame would otherwise look "constant"
+        # in every column and confuse add_constant's default column-detection.
+        x_new = pd.DataFrame([{
+            'rv_d': rv[-1],
+            'rv_w': np.mean(rv[-5:]),
+            'rv_m': np.mean(rv[-22:]),
+        }])
+        x_new = self._add_constant(x_new, has_constant='add')
+        return float(self.result.predict(x_new).iloc[0])
+
+
+class HARXModel(HARRVModel):
+    """
+    HAR-RV augmented with lagged VIX as an exogenous regressor (HAR-X).
+
+    Same OLS architecture as HARRVModel plus one added `vix_lag1` regressor --
+    isolating whether VIX's information content (not any ML architecture)
+    explains part of the gap between econometric and ML forecast accuracy.
+    """
+
+    def _build_X(self, rv_series: pd.Series, vix_series: pd.Series) -> pd.DataFrame:  # type: ignore[override]
+        X = super()._build_X(rv_series).copy()
+        # Base class's X row j corresponds to rv_series.iloc[21 + j] (verified:
+        # X built from rv[:-1] then .iloc[21:] keeps positions 21..N-2 of the
+        # original series) -- so vix_lag1 must use the identical positional
+        # slice to stay aligned with rv_d's "as of the same date" convention.
+        n = len(rv_series)
+        vix_full = vix_series.reindex(rv_series.index).to_numpy(dtype=float)
+        X['vix_lag1'] = vix_full[21:n - 1]
+        return X
+
+    def fit(self, rv_series: pd.Series, vix_series: pd.Series, y=None) -> "HARXModel":  # type: ignore[override]
+        X = self._build_X(rv_series, vix_series)
+        target = rv_series.values[22:]
+        X_const = self._add_constant(X.dropna())
+        self.result = self._OLS(target[-len(X_const):], X_const).fit()
+        self._last_rv = rv_series
+        self._last_vix = vix_series
+        return self
+
+    def forecast(self, rv_series: Optional[pd.Series] = None,  # type: ignore[override]
+                 vix_series: Optional[pd.Series] = None) -> float:
+        assert self.result is not None, "Call fit() before forecast()"
+        if rv_series is None:
+            rv_series = self._last_rv
+        if vix_series is None:
+            vix_series = self._last_vix
+        rv: np.ndarray = rv_series.to_numpy(dtype=float)  # type: ignore[union-attr]
+        vix_last = float(vix_series.reindex(rv_series.index).ffill().iloc[-1])  # type: ignore[union-attr]
+        x_new = pd.DataFrame([{
+            'rv_d': rv[-1],
+            'rv_w': np.mean(rv[-5:]),
+            'rv_m': np.mean(rv[-22:]),
+            'vix_lag1': vix_last,
+        }])
+        x_new = self._add_constant(x_new, has_constant='add')
+        return float(self.result.predict(x_new).iloc[0])
 
 
 class RandomForestModel:
@@ -399,12 +460,30 @@ class GARCHHybridModel:
         self._garch.fit(returns)
         result = self._garch.result
 
-        cond_vol = result.conditional_volatility  # annualized % (same scale as rv_21d)
+        # NOTE on two train/inference mismatches previously present here (both fixed below):
+        #
+        # (1) SCALE: result.conditional_volatility is daily-scale (fit on returns*100,
+        # not annualized), but GARCHModel.forecast() -- used below for the forecast-time
+        # value of this same feature slot -- annualizes via `* sqrt(252)`. Training on
+        # the raw daily-scale value while forecasting with the annualized value put the
+        # ML model's "garch_fitted_vol" feature roughly sqrt(252)~=15.87x out of scale
+        # between train and inference. Fixed by annualizing here too.
+        #
+        # (2) LOOK-AHEAD: cond_vol[t] itself is already a genuine one-step-ahead quantity
+        # (equals result.forecast(start=t-1, horizon=1)), so it aligns correctly with
+        # X[t]'s "info through t-1" convention with no further shift needed. But
+        # std_resid[t] = resid_t / cond_vol[t], where resid_t is the demeaned return
+        # REALIZED on day t (corr(resid_t, return_t) ~= 1.0) -- i.e. it requires
+        # same-day information, unlike every other feature in this codebase (all
+        # `.shift(1)`'d). Left unshifted, the ML model trained on a feature that leaked
+        # day-t's own move into predicting day-t's target, then at forecast() time only
+        # ever saw a genuinely-lagged value (`std_resid.iloc[-1]`, the last available
+        # residual as of T) -- fixed by shifting by 1 to match.
+        cond_vol = result.conditional_volatility * np.sqrt(252)  # annualize (% of return -> % p.a.)
         std_resid = result.resid / result.conditional_volatility
 
-        # Align to X's index (daily, same dates)
         fitted_vol = pd.Series(cond_vol.values, index=returns.index).reindex(X.index)
-        std_resid_s = pd.Series(std_resid.values, index=returns.index).reindex(X.index)
+        std_resid_s = pd.Series(std_resid.values, index=returns.index).shift(1).reindex(X.index)
 
         X_aug = self._augment(X, fitted_vol, std_resid_s)
         y_aligned = y.reindex(X_aug.index)

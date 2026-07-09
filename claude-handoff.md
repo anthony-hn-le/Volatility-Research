@@ -71,7 +71,7 @@ Section 4 Limitations) would be a new phase, not a continuation of this plan.
 | Source | Primary Use | Coverage | Notes |
 |--------|------------|----------|-------|
 | **yfinance** | Daily prices, primary | All 18 assets, 2010-2025 | Fast, reliable, free |
-| **Alpha Vantage** | Backup/high-freq data | All assets | API Key: `0N9ORVW2U03KPT40` |
+| **Alpha Vantage** | Backup/high-freq data | All assets | API Key: see `.env` (`ALPHA_VANTAGE_KEY`) |
 | **CBOE** | VIX levels/changes | Index-level feature | Manual or pandas-datareader |
 | **FRED** | Market breadth | Macro features | Via pandas-datareader |
 
@@ -399,9 +399,11 @@ def engineer_features(df, target_col='rv_21d'):
 
 **Alpha Vantage API Key:**
 ```
-0N9ORVW2U03KPT40
+<ALPHA_VANTAGE_API_KEY — see .env, do not commit>
 ```
-⚠️ Store in environment variable or `.env` file (not in git repo)
+⚠️ Store in environment variable or `.env` file (not in git repo). The key previously hardcoded
+here was committed to git history (commits 20ed683, 84ae422) and must be rotated at
+alphavantage.co before this repo is made public — treat the old key as compromised.
 
 **File Paths (in Cowork):**
 ```
