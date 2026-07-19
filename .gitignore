@@ -25,3 +25,7 @@ BACKTESTING_IDEAS.md
 # not part of the release; kept on disk, not tracked in git. Still visible in
 # git history prior to this move (not scrubbed), just not tracked going forward.
 dev-notes/
+
+# local Claude Code guidance, not for the public repo
+CLAUDE.md
+docs/agents/
